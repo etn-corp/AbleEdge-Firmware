@@ -133,7 +133,12 @@ jobs:
             if [ "$DOWNLOAD_URL" != "null" ]; then
               # Download file to target directory
               curl -s -L "$DOWNLOAD_URL" -o "$LATEST_VERSION/$file"
-              echo "Downloaded $file successfully"
+              if [ $? -ne 0 ]; then
+                echo "Failed to download $file from $DOWNLOAD_URL"
+                exit 1
+              else
+                echo "Downloaded $file successfully"
+              fi
             else
               echo "Failed to get download URL for $file"
             fi
