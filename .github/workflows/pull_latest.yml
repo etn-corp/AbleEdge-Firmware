@@ -174,7 +174,7 @@ jobs:
           echo "## Workflow Summary" >> $GITHUB_STEP_SUMMARY
           echo "- **Source Repository**: $SOURCE_REPO" >> $GITHUB_STEP_SUMMARY
           echo "- **Latest Version**: $LATEST_VERSION" >> $GITHUB_STEP_SUMMARY
-          echo "- **Files Updated**: $(ls $LATEST_VERSION/*.xml 2>/dev/null | wc -l) XML files" >> $GITHUB_STEP_SUMMARY
+          echo "- **Files Updated**: $(ls "$LATEST_VERSION"/*.xml 2>/dev/null | wc -l) XML files" >> $GITHUB_STEP_SUMMARY
           
           if [ "${{ steps.check-changes.outputs.has_changes }}" = "true" ]; then
             echo "- **Status**: ✅ Files updated and committed" >> $GITHUB_STEP_SUMMARY
