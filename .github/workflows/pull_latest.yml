@@ -164,11 +164,7 @@ jobs:
           
           # Add and commit changes
           git add .
-          git commit -m "Update to latest release files from version $LATEST_VERSION
-          
-          - Downloaded XML files from $SOURCE_REPO
-          - Version: $LATEST_VERSION
-          - Automated update via GitHub Actions"
+          git commit -m "Update to latest release files from version $LATEST_VERSION\n- Downloaded XML files from $SOURCE_REPO\n- Version: $LATEST_VERSION\n- Automated update via GitHub Actions"
           
           # Push changes
           git push
