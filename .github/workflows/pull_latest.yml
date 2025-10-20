@@ -1,36 +1,187 @@
-# This is a basic workflow to help you get started with Actions
-
-name: CI
+# Pull Latest Release Files from Private Repository
+#
+# SETUP REQUIRED:
+# This workflow requires a GitHub Personal Access Token (PAT) to access the private source repository.
+# 
+# To set up the required secret:
+# 1. Go to GitHub Settings > Developer settings > Personal access tokens > Tokens (classic)
+# 2. Create a new token with 'repo' scope (full repository access)
+# 3. Copy the token value
+# 4. In this repository, go to Settings > Secrets and variables > Actions
+# 5. Create a new repository secret named: SOURCE_REPO_TOKEN
+# 6. Paste the token value
+#
+# The token should have access to: etn-electrical/Smart-Breaker-2.0-Build-Releases
+#
+name: Pull Latest Release Files
 
 # Controls when the workflow will run
 on:
-  # Triggers the workflow on push or pull request events but only for the "main" branch
-  push:
-    branches: [ "main" ]
-  pull_request:
-    branches: [ "main" ]
-
-  # Allows you to run this workflow manually from the Actions tab
+  # Allows manual triggering from Actions tab
   workflow_dispatch:
+  
+  # Optionally run on a schedule (daily at 2 AM UTC)
+  schedule:
+    - cron: '0 2 * * *'
 
-# A workflow run is made up of one or more jobs that can run sequentially or in parallel
+# Ensure only one instance runs at a time
+concurrency:
+  group: pull-latest-release
+  cancel-in-progress: true
+
 jobs:
-  # This workflow contains a single job called "build"
-  build:
-    # The type of runner that the job will run on
+  pull-latest-files:
     runs-on: ubuntu-latest
-
-    # Steps represent a sequence of tasks that will be executed as part of the job
+    
+    permissions:
+      contents: write  # Needed to commit files back to repo
+      
     steps:
-      # Checks-out your repository under $GITHUB_WORKSPACE, so your job can access it
-      - uses: actions/checkout@v4
-
-      # Runs a single command using the runners shell
-      - name: Run a one-line script
-        run: echo Hello, world!
-
-      # Runs a set of commands using the runners shell
-      - name: Run a multi-line script
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          token: ${{ github.token }}  # Use built-in GITHUB_TOKEN (no secrets exposed)
+          
+      - name: Set up environment
         run: |
-          echo Add other actions to build,
-          echo test, and deploy your project.
+          # Set up variables for the source repository
+          echo "SOURCE_REPO=etn-electrical/Smart-Breaker-2.0-Build-Releases" >> $GITHUB_ENV
+          echo "TARGET_DIR=." >> $GITHUB_ENV
+          
+      - name: Find latest version
+        id: find-version
+        run: |
+          # Use GitHub API to get repository contents (private repo, requires auth)
+          echo "Finding latest version directory..."
+          
+          # Get list of directories from the private repo using authentication
+          DIRS=$(curl -s \
+                 -H "Authorization: token ${{ secrets.SOURCE_REPO_TOKEN }}" \
+                 -H "Accept: application/vnd.github.v3+json" \
+                 "https://api.github.com/repos/$SOURCE_REPO/contents" | \
+                 jq -r '.[] | select(.type == "dir") | .name' | \
+                 grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | \
+                 sort -V | \
+                 tail -1)
+          
+          if [ -z "$DIRS" ]; then
+            echo "No version directories found"
+            exit 1
+          fi
+          
+          echo "Latest version found: $DIRS"
+          echo "latest_version=$DIRS" >> $GITHUB_OUTPUT
+          echo "LATEST_VERSION=$DIRS" >> $GITHUB_ENV
+          
+      - name: Check if ADU_Test_Builds exists
+        id: check-path
+        run: |
+          # Check if the ADU_Test_Builds directory exists in the latest version
+          echo "Checking for ADU_Test_Builds in version $LATEST_VERSION..."
+          
+          ADU_PATH_EXISTS=$(curl -s \
+                           -H "Authorization: token ${{ secrets.SOURCE_REPO_TOKEN }}" \
+                           -H "Accept: application/vnd.github.v3+json" \
+                           "https://api.github.com/repos/$SOURCE_REPO/contents/$LATEST_VERSION/ADU_Test_Builds" | \
+                           jq -r 'type')
+          
+          if [ "$ADU_PATH_EXISTS" = "array" ]; then
+            echo "ADU_Test_Builds directory found"
+            echo "path_exists=true" >> $GITHUB_OUTPUT
+          else
+            echo "ADU_Test_Builds directory not found, checking root of version directory"
+            echo "path_exists=false" >> $GITHUB_OUTPUT
+          fi
+          
+      - name: Download XML files
+        run: |
+          # Create target directory if it doesn't exist
+          mkdir -p "$LATEST_VERSION"
+          
+          # Determine the correct path to check
+          if [ "${{ steps.check-path.outputs.path_exists }}" = "true" ]; then
+            API_PATH="$LATEST_VERSION/ADU_Test_Builds"
+          else
+            API_PATH="$LATEST_VERSION"
+          fi
+          
+          echo "Downloading XML files from $API_PATH..."
+          
+          # Get list of XML files from the appropriate directory
+          XML_FILES=$(curl -s \
+                     -H "Authorization: token ${{ secrets.SOURCE_REPO_TOKEN }}" \
+                     -H "Accept: application/vnd.github.v3+json" \
+                     "https://api.github.com/repos/$SOURCE_REPO/contents/$API_PATH" | \
+                     jq -r '.[] | select(.name | endswith(".xml")) | .name')
+          
+          if [ -z "$XML_FILES" ]; then
+            echo "No XML files found in $API_PATH"
+            exit 1
+          fi
+          
+          # Download each XML file
+          for file in $XML_FILES; do
+            echo "Downloading $file..."
+            
+            # Get download URL for the file
+            DOWNLOAD_URL=$(curl -s \
+                          -H "Authorization: token ${{ secrets.SOURCE_REPO_TOKEN }}" \
+                          -H "Accept: application/vnd.github.v3+json" \
+                          "https://api.github.com/repos/$SOURCE_REPO/contents/$API_PATH/$file" | \
+                          jq -r '.download_url')
+            
+            if [ "$DOWNLOAD_URL" != "null" ]; then
+              # Download file to target directory
+              curl -s -L "$DOWNLOAD_URL" -o "$LATEST_VERSION/$file"
+              echo "Downloaded $file successfully"
+            else
+              echo "Failed to get download URL for $file"
+            fi
+          done
+          
+          # List downloaded files
+          echo "Files downloaded to $LATEST_VERSION/:"
+          ls -la "$LATEST_VERSION/"
+          
+      - name: Check for changes
+        id: check-changes
+        run: |
+          # Check if there are any changes to commit
+          if git diff --quiet && git diff --staged --quiet; then
+            echo "No changes detected"
+            echo "has_changes=false" >> $GITHUB_OUTPUT
+          else
+            echo "Changes detected"
+            echo "has_changes=true" >> $GITHUB_OUTPUT
+          fi
+          
+      - name: Commit and push changes
+        if: steps.check-changes.outputs.has_changes == 'true'
+        run: |
+          # Configure git
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          
+          # Add and commit changes
+          git add .
+          git commit -m "Update to latest release files from version $LATEST_VERSION
+          
+          - Downloaded XML files from $SOURCE_REPO
+          - Version: $LATEST_VERSION
+          - Automated update via GitHub Actions"
+          
+          # Push changes
+          git push
+          
+      - name: Summary
+        run: |
+          echo "## Workflow Summary" >> $GITHUB_STEP_SUMMARY
+          echo "- **Source Repository**: $SOURCE_REPO" >> $GITHUB_STEP_SUMMARY
+          echo "- **Latest Version**: $LATEST_VERSION" >> $GITHUB_STEP_SUMMARY
+          echo "- **Files Updated**: $(ls $LATEST_VERSION/*.xml 2>/dev/null | wc -l) XML files" >> $GITHUB_STEP_SUMMARY
+          
+          if [ "${{ steps.check-changes.outputs.has_changes }}" = "true" ]; then
+            echo "- **Status**: ✅ Files updated and committed" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "- **Status**: ℹ️ No changes detected" >> $GITHUB_STEP_SUMMARY
+          fi
