@@ -41,6 +41,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           token: ${{ github.token }}  # Use built-in GITHUB_TOKEN (no secrets exposed)
+          fetch-depth: 0
           
       - name: Set up environment
         run: |
@@ -152,7 +153,9 @@ jobs:
         id: check-changes
         run: |
           # Check if there are any changes to commit
-          if git diff --quiet && git diff --staged --quiet; then
+          git fetch --unshallow || true
+          git config --global --add safe.directory $GITHUB_WORKSPACE
+          if ! git diff-index --quiet HEAD --; then
             echo "No changes detected"
             echo "has_changes=false" >> $GITHUB_OUTPUT
           else
