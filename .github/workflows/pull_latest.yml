@@ -189,3 +189,14 @@ jobs:
           else
             echo "- **Status**: ℹ️ No changes detected" >> $GITHUB_STEP_SUMMARY
           fi
+      - name: Monitor RSS feeds for releases
+        uses: robdel12/rss-checker@v1.0.0
+        with:
+         rss-feeds: |
+          https://github.com/aseembajpai-eaton/AbleEdge-Firmware/commits/main.atom
+         commit-directory: rssdata
+         commit-message: "Auto-update release feed"
+         debug: true
+        env:
+         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+   
