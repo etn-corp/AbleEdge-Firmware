@@ -208,6 +208,18 @@ jobs:
           else
             echo "exists=false" >> $GITHUB_OUTPUT
           fi
+
+      - name: Zip release folder
+        run: |
+          ZIP_FILE="/tmp/${RELEASE_VERSION}.zip"
+          if [ -d "./${RELEASE_VERSION}" ]; then
+            zip -r "$ZIP_FILE" "./${RELEASE_VERSION}"
+            echo "Zipped folder ./\${RELEASE_VERSION} into $ZIP_FILE"
+            echo "ZIP_FILE=$ZIP_FILE" >> $GITHUB_ENV
+          else
+            echo "Folder ./\${RELEASE_VERSION} does not exist!"
+            exit 1
+          fi
           
       - name: Create GitHub Release
         id: create_release
