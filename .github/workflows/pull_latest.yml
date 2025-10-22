@@ -194,7 +194,7 @@ jobs:
         with:
          rss-feeds: |
           https://github.com/aseembajpai-eaton/AbleEdge-Firmware/commits/main.atom
-         commit-directory: rssdata
+         #commit-directory: rssdata
          commit-message: "Auto-update release feed"
          debug: true
         env:
