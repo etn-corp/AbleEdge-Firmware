@@ -195,8 +195,8 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tag_name: $LATEST_VERSION
-          release_name: $LATEST_VERSION
+          tag_name: ${{ LATEST_VERSION }}
+          release_name: ${{ LATEST_VERSION }}
           draft: false
           prerelease: false
 
@@ -206,6 +206,6 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: ./build/$LATEST_VERSION
-          asset_name: $LATEST_VERSION.zip
+          asset_path: ./${{ LATEST_VERSION }}
+          asset_name: ${{ LATEST_VERSION }}.zip
           asset_content_type: application/zip
