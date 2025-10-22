@@ -185,7 +185,27 @@ jobs:
           echo "- **Files Updated**: $(ls "$LATEST_VERSION"/*.xml 2>/dev/null | wc -l) XML files" >> $GITHUB_STEP_SUMMARY
           
           if [ "${{ steps.check-changes.outputs.has_changes }}" = "true" ]; then
-            echo "- **Status**: ✅ Files updated and committed" >> $GITHUB_STEP_SUMMARY
+            echo "- **Status**: Files updated and committed" >> $GITHUB_STEP_SUMMARY
           else
-            echo "- **Status**: ℹ️ No changes detected" >> $GITHUB_STEP_SUMMARY
+            echo "- **Status**: No changes detected" >> $GITHUB_STEP_SUMMARY
           fi
+      - name: Create GitHub Release
+        id: create_release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: $LATEST_VERSION
+          release_name: $LATEST_VERSION
+          draft: false
+          prerelease: false
+
+      - name: Upload release assets
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: ./$LATEST_VERSION/
+          asset_name: app.zip
+          asset_content_type: application/zip
