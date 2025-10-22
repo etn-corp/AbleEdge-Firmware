@@ -189,13 +189,20 @@ jobs:
           else
             echo "- **Status**: No changes detected" >> $GITHUB_STEP_SUMMARY
           fi
+
+      - name: Set release version
+        id: vars
+        run: |
+          echo "RELEASE_VERSION=${LATEST_VERSION}" >> $GITHUB_ENV
+          echo "Release version is $LATEST_VERSION"    
+          
       - name: Create GitHub Release
         id: create_release
         uses: actions/create-release@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tag_name: ${{ LATEST_VERSION }}
-          release_name: ${{ LATEST_VERSION }}
+          tag_name: ${{ env.RELEASE_VERSION }}
+          release_name: ${{ env.RELEASE_VERSION }}
           draft: false
           prerelease: false
