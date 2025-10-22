@@ -199,13 +199,3 @@ jobs:
           release_name: ${{ LATEST_VERSION }}
           draft: false
           prerelease: false
-
-      - name: Upload release assets
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: ./${{ LATEST_VERSION }}
-          asset_name: ${{ LATEST_VERSION }}.zip
-          asset_content_type: application/zip
