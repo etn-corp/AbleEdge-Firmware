@@ -3,16 +3,12 @@
 name: Pull Latest Release Files
 
 on:
-  # Triggered by the source repo when a new release is published (Stage 2)
+  # Triggered automatically by the source repo when a new release is published
   repository_dispatch:
     types: [firmware-release]
 
-  # Manual trigger from the Actions tab
+  # Manual trigger from the Actions tab for testing
   workflow_dispatch:
-
-  # Fallback daily poll — can be removed once repository_dispatch is in place (Stage 2)
-  schedule:
-    - cron: '0 2 * * *'
 
 # Ensure only one instance runs at a time
 concurrency:
