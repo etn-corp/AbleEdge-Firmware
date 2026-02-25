@@ -70,10 +70,14 @@ jobs:
             exit 1
           fi
 
-          VERSION=$(echo "$RELEASE_JSON" | jq -r '.tag_name')
+          TAG=$(echo "$RELEASE_JSON" | jq -r '.tag_name')
           RELEASE_NAME=$(echo "$RELEASE_JSON" | jq -r '.name')
 
-          echo "Latest release: $VERSION — $RELEASE_NAME"
+          # Strip leading 'v' from tag to get the folder name (e.g. v3.1.2 -> 3.1.2)
+          VERSION=${TAG#v}
+
+          echo "Latest release tag: $TAG  (folder: $VERSION) — $RELEASE_NAME"
+          echo "RELEASE_TAG=$TAG" >> $GITHUB_ENV
           echo "LATEST_VERSION=$VERSION" >> $GITHUB_ENV
           echo "latest_version=$VERSION" >> $GITHUB_OUTPUT
           echo "RELEASE_NAME=$RELEASE_NAME" >> $GITHUB_ENV
@@ -85,32 +89,40 @@ jobs:
           echo "$RELEASE_BODY" >> $GITHUB_ENV
           echo "$EOF" >> $GITHUB_ENV
 
-          # Write asset list for the download step
-          echo "$RELEASE_JSON" | jq -c '[.assets[] | {name: .name, url: .url}]' > /tmp/assets.json
-          echo "Assets found:"
-          cat /tmp/assets.json | jq -r '.[].name'
-
-      - name: Download release assets
+      - name: Download files from source repo at release tag
         run: |
           mkdir -p "$LATEST_VERSION"
-          echo "Downloading release assets for version $LATEST_VERSION..."
+          echo "Fetching file list from $SOURCE_REPO at tag $RELEASE_TAG (folder: $LATEST_VERSION)..."
 
-          ASSETS=$(cat /tmp/assets.json)
-          COUNT=$(echo "$ASSETS" | jq 'length')
+          # List files in the versioned directory at the release tag ref
+          FILES_JSON=$(curl -s \
+            -H "Authorization: token ${{ secrets.SOURCE_REPO_TOKEN }}" \
+            -H "Accept: application/vnd.github.v3+json" \
+            "https://api.github.com/repos/$SOURCE_REPO/contents/$LATEST_VERSION?ref=$RELEASE_TAG")
 
-          if [ "$COUNT" -eq 0 ]; then
-            echo "ERROR: No assets found in release $LATEST_VERSION"
+          # Validate response is an array
+          if ! echo "$FILES_JSON" | jq -e 'type == "array"' > /dev/null 2>&1; then
+            echo "ERROR: Could not list directory $LATEST_VERSION at ref $RELEASE_TAG"
+            echo "API response: $(echo "$FILES_JSON" | jq -r '.message // .')"
             exit 1
           fi
 
-          echo "$ASSETS" | jq -c '.[]' | while read -r asset; do
-            NAME=$(echo "$asset" | jq -r '.name')
-            URL=$(echo "$asset"  | jq -r '.url')
+          COUNT=$(echo "$FILES_JSON" | jq 'length')
+          echo "Found $COUNT file(s) in $LATEST_VERSION/ at $RELEASE_TAG"
+
+          if [ "$COUNT" -eq 0 ]; then
+            echo "ERROR: No files found in $LATEST_VERSION/ at ref $RELEASE_TAG"
+            exit 1
+          fi
+
+          # Download every file in the directory
+          echo "$FILES_JSON" | jq -c '.[] | select(.type == "file")' | while read -r file; do
+            NAME=$(echo "$file" | jq -r '.name')
+            DOWNLOAD_URL=$(echo "$file" | jq -r '.download_url')
             echo "Downloading $NAME..."
             curl -s -L \
               -H "Authorization: token ${{ secrets.SOURCE_REPO_TOKEN }}" \
-              -H "Accept: application/octet-stream" \
-              "$URL" -o "$LATEST_VERSION/$NAME"
+              "$DOWNLOAD_URL" -o "$LATEST_VERSION/$NAME"
             if [ $? -ne 0 ]; then
               echo "ERROR: Failed to download $NAME"
               exit 1
@@ -118,7 +130,7 @@ jobs:
           done
 
           echo ""
-          echo "Assets in $LATEST_VERSION/:"
+          echo "Files in $LATEST_VERSION/:"
           ls -lh "$LATEST_VERSION/"
 
       - name: Check for changes
@@ -175,7 +187,7 @@ jobs:
             ${{ env.UPSTREAM_RELEASE_BODY }}
 
             ---
-            *Pulled from [`${{ env.SOURCE_REPO }}`](https://github.com/${{ env.SOURCE_REPO }}/releases/tag/${{ env.LATEST_VERSION }})*
+            *Pulled from [`${{ env.SOURCE_REPO }}`](https://github.com/${{ env.SOURCE_REPO }}/releases/tag/${{ env.RELEASE_TAG }})*
           files: ${{ env.LATEST_VERSION }}/*
           make_latest: "true"
           draft: false
