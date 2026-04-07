@@ -135,14 +135,17 @@ jobs:
           zip -r "/tmp/$ZIP_NAME" "$LATEST_VERSION/"
           echo "Zip size: $(du -h /tmp/$ZIP_NAME | cut -f1)"
 
-          # Copy zip and raw folder into the workspace for committing
-          cp "/tmp/$ZIP_NAME" "$GITHUB_WORKSPACE/$ZIP_NAME"
+          # Copy only the raw version folder into the workspace for committing.
+          # The zip stays in /tmp and is uploaded directly as a release asset —
+          # no need to commit a 60MB+ zip into git history.
           cp -r "$VERSION_DIR" "$GITHUB_WORKSPACE/$LATEST_VERSION"
+
+          echo "ZIP_PATH=/tmp/$ZIP_NAME" >> $GITHUB_ENV
 
           echo ""
           echo "Workspace files staged:"
           find "$GITHUB_WORKSPACE/$LATEST_VERSION" -type f | sort
-          ls -lh "$GITHUB_WORKSPACE/$ZIP_NAME"
+          echo "Release asset (not committed to git): /tmp/$ZIP_NAME"
 
       - name: Check for changes
         id: check-changes
@@ -163,7 +166,8 @@ jobs:
         run: |
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
-          git add .
+          # Only stage the versioned folder — not the zip (which lives in /tmp)
+          git add "$LATEST_VERSION/"
           git commit -m "chore: pull release assets for version $LATEST_VERSION
 
           - Source: $SOURCE_REPO
@@ -201,7 +205,7 @@ jobs:
 
             ---
             *Pulled from [`${{ env.SOURCE_REPO }}`](https://github.com/${{ env.SOURCE_REPO }}/releases/tag/${{ env.RELEASE_TAG }})*
-          files: ${{ env.ZIP_NAME }}
+          files: ${{ env.ZIP_PATH }}
           make_latest: "true"
           draft: false
           prerelease: false
