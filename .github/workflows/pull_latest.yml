@@ -1,5 +1,5 @@
 # Pull Latest Release Files from Private Repository
-
+#
 name: Pull Latest Release Files
 
 on:
@@ -9,6 +9,11 @@ on:
 
   # Manual trigger from the Actions tab for testing
   workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to pull (e.g. v3.1.3). Leave blank to use latest.'
+        required: false
+        default: ''
 
 # Ensure only one instance runs at a time
 concurrency:
@@ -29,92 +34,123 @@ jobs:
           token: ${{ github.token }}
           fetch-depth: 0
 
-      - name: Fetch latest release from source repo
+      - name: Resolve release tag and metadata
         id: fetch-release
         run: |
           SOURCE_REPO="etn-electrical/Smart-Breaker-2.0-Build-Releases"
           echo "SOURCE_REPO=$SOURCE_REPO" >> $GITHUB_ENV
-          echo "Fetching latest release from $SOURCE_REPO..."
 
+          # Prefer tag from dispatch payload, then manual input, then fall back to latest
+          DISPATCHED_TAG="${{ github.event.client_payload.tag }}"
+          MANUAL_TAG="${{ github.event.inputs.tag }}"
+
+          if [ -n "$DISPATCHED_TAG" ]; then
+            TAG="$DISPATCHED_TAG"
+            echo "Using tag from repository_dispatch payload: $TAG"
+          elif [ -n "$MANUAL_TAG" ]; then
+            TAG="$MANUAL_TAG"
+            echo "Using tag from workflow_dispatch input: $TAG"
+          else
+            echo "No tag provided — fetching latest release..."
+            LATEST_JSON=$(curl -s \
+              -H "Authorization: token ${{ secrets.SOURCE_REPO_TOKEN }}" \
+              -H "Accept: application/vnd.github.v3+json" \
+              "https://api.github.com/repos/$SOURCE_REPO/releases/latest")
+            TAG=$(echo "$LATEST_JSON" | jq -r '.tag_name')
+            echo "Resolved latest tag: $TAG"
+          fi
+
+          # Fetch full release metadata for the resolved tag
           RELEASE_JSON=$(curl -s \
             -H "Authorization: token ${{ secrets.SOURCE_REPO_TOKEN }}" \
             -H "Accept: application/vnd.github.v3+json" \
-            "https://api.github.com/repos/$SOURCE_REPO/releases/latest")
+            "https://api.github.com/repos/$SOURCE_REPO/releases/tags/$TAG")
 
-          # Validate we received a real release
           if echo "$RELEASE_JSON" | jq -e '.message' > /dev/null 2>&1; then
             echo "ERROR: $(echo "$RELEASE_JSON" | jq -r '.message')"
             exit 1
           fi
 
-          TAG=$(echo "$RELEASE_JSON" | jq -r '.tag_name')
           RELEASE_NAME=$(echo "$RELEASE_JSON" | jq -r '.name')
 
-          # Strip leading 'v' from tag to get the folder name (e.g. v3.1.2 -> 3.1.2)
+          # Strip leading 'v' from tag to get the folder name (e.g. v3.1.3 -> 3.1.3)
           VERSION=${TAG#v}
 
-          echo "Latest release tag: $TAG  (folder: $VERSION) — $RELEASE_NAME"
+          echo "Release tag: $TAG  (folder: $VERSION) — $RELEASE_NAME"
           echo "RELEASE_TAG=$TAG" >> $GITHUB_ENV
           echo "LATEST_VERSION=$VERSION" >> $GITHUB_ENV
           echo "latest_version=$VERSION" >> $GITHUB_OUTPUT
           echo "RELEASE_NAME=$RELEASE_NAME" >> $GITHUB_ENV
 
-          # Capture upstream release body (used in release notes below)
+          # Capture upstream release body for use in release notes
           RELEASE_BODY=$(echo "$RELEASE_JSON" | jq -r '.body // ""')
           EOF=$(dd if=/dev/urandom bs=15 count=1 status=none | base64)
           echo "UPSTREAM_RELEASE_BODY<<$EOF" >> $GITHUB_ENV
           echo "$RELEASE_BODY" >> $GITHUB_ENV
           echo "$EOF" >> $GITHUB_ENV
 
-      - name: Download files from source repo at release tag
+      - name: Download version folder from source repo as zip
         run: |
-          mkdir -p "$LATEST_VERSION"
-          echo "Fetching file list from $SOURCE_REPO at tag $RELEASE_TAG (folder: $LATEST_VERSION)..."
+          echo "Downloading $LATEST_VERSION/ from $SOURCE_REPO at $RELEASE_TAG via tarball API..."
 
-          # List files in the versioned directory at the release tag ref
-          FILES_JSON=$(curl -s \
+          # Use the tarball API to download the full repo at the release tag, then extract only
+          # the versioned folder. This correctly captures all subdirectories
+          # (ADU_Test_Builds/, Protection Build/, etc.) rather than only top-level files.
+          mkdir -p /tmp/source-tarball
+          curl -s -L \
             -H "Authorization: token ${{ secrets.SOURCE_REPO_TOKEN }}" \
             -H "Accept: application/vnd.github.v3+json" \
-            "https://api.github.com/repos/$SOURCE_REPO/contents/$LATEST_VERSION?ref=$RELEASE_TAG")
+            "https://api.github.com/repos/$SOURCE_REPO/tarball/$RELEASE_TAG" \
+            -o /tmp/source-tarball/repo.tar.gz
 
-          # Validate response is an array
-          if ! echo "$FILES_JSON" | jq -e 'type == "array"' > /dev/null 2>&1; then
-            echo "ERROR: Could not list directory $LATEST_VERSION at ref $RELEASE_TAG"
-            echo "API response: $(echo "$FILES_JSON" | jq -r '.message // .')"
+          if [ ! -s /tmp/source-tarball/repo.tar.gz ]; then
+            echo "ERROR: Tarball download failed or is empty"
             exit 1
           fi
 
-          COUNT=$(echo "$FILES_JSON" | jq 'length')
-          echo "Found $COUNT file(s) in $LATEST_VERSION/ at $RELEASE_TAG"
+          echo "Tarball size: $(du -h /tmp/source-tarball/repo.tar.gz | cut -f1)"
 
-          if [ "$COUNT" -eq 0 ]; then
-            echo "ERROR: No files found in $LATEST_VERSION/ at ref $RELEASE_TAG"
+          # Extract — GitHub wraps contents in a root dir like etn-electrical-Smart-Breaker-<sha>/
+          tar -xzf /tmp/source-tarball/repo.tar.gz -C /tmp/source-tarball
+          EXTRACTED_ROOT=$(find /tmp/source-tarball -mindepth 1 -maxdepth 1 -type d | head -1)
+          echo "Extracted root: $EXTRACTED_ROOT"
+
+          # Verify the version folder exists
+          VERSION_DIR="$EXTRACTED_ROOT/$LATEST_VERSION"
+          if [ ! -d "$VERSION_DIR" ]; then
+            echo "ERROR: Folder $LATEST_VERSION not found in source repo at tag $RELEASE_TAG"
+            echo "Available top-level dirs:"
+            ls "$EXTRACTED_ROOT/"
             exit 1
           fi
 
-          # Download every file in the directory
-          echo "$FILES_JSON" | jq -c '.[] | select(.type == "file")' | while read -r file; do
-            NAME=$(echo "$file" | jq -r '.name')
-            DOWNLOAD_URL=$(echo "$file" | jq -r '.download_url')
-            echo "Downloading $NAME..."
-            curl -s -L \
-              -H "Authorization: token ${{ secrets.SOURCE_REPO_TOKEN }}" \
-              "$DOWNLOAD_URL" -o "$LATEST_VERSION/$NAME"
-            if [ $? -ne 0 ]; then
-              echo "ERROR: Failed to download $NAME"
-              exit 1
-            fi
-          done
+          echo "Contents of $LATEST_VERSION/ in source repo:"
+          find "$VERSION_DIR" -type f | sort
+
+          # Zip the version folder to preserve subdirectory structure for the release asset
+          ZIP_NAME="Smart-Breaker-2.0-Firmware-${LATEST_VERSION}.zip"
+          echo "ZIP_NAME=$ZIP_NAME" >> $GITHUB_ENV
+
+          cd "$EXTRACTED_ROOT"
+          zip -r "/tmp/$ZIP_NAME" "$LATEST_VERSION/"
+          echo "Zip size: $(du -h /tmp/$ZIP_NAME | cut -f1)"
+
+          # Copy zip and raw folder into the workspace for committing
+          cp "/tmp/$ZIP_NAME" "$GITHUB_WORKSPACE/$ZIP_NAME"
+          cp -r "$VERSION_DIR" "$GITHUB_WORKSPACE/$LATEST_VERSION"
 
           echo ""
-          echo "Files in $LATEST_VERSION/:"
-          ls -lh "$LATEST_VERSION/"
+          echo "Workspace files staged:"
+          find "$GITHUB_WORKSPACE/$LATEST_VERSION" -type f | sort
+          ls -lh "$GITHUB_WORKSPACE/$ZIP_NAME"
 
       - name: Check for changes
         id: check-changes
         run: |
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
-          if ! git diff-index --quiet HEAD --; then
+          # Use 'git status --porcelain' so brand-new untracked folders are also detected,
+          # unlike 'git diff-index' which only sees changes to already-tracked files.
+          if [ -n "$(git status --porcelain)" ]; then
             echo "Changes detected — new assets for version $LATEST_VERSION"
             echo "has_changes=true" >> $GITHUB_OUTPUT
           else
@@ -165,7 +201,7 @@ jobs:
 
             ---
             *Pulled from [`${{ env.SOURCE_REPO }}`](https://github.com/${{ env.SOURCE_REPO }}/releases/tag/${{ env.RELEASE_TAG }})*
-          files: ${{ env.LATEST_VERSION }}/*
+          files: ${{ env.ZIP_NAME }}
           make_latest: "true"
           draft: false
           prerelease: false
@@ -178,6 +214,6 @@ jobs:
           echo "|---|---|" >> $GITHUB_STEP_SUMMARY
           echo "| **Source Repo** | \`$SOURCE_REPO\` |" >> $GITHUB_STEP_SUMMARY
           echo "| **Version** | \`$LATEST_VERSION\` |" >> $GITHUB_STEP_SUMMARY
-          echo "| **Assets** | $(ls "$LATEST_VERSION/" 2>/dev/null | wc -l | tr -d ' ') files |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Zip Asset** | \`$ZIP_NAME\` |" >> $GITHUB_STEP_SUMMARY
           echo "| **Committed** | ${{ steps.check-changes.outputs.has_changes }} |" >> $GITHUB_STEP_SUMMARY
           echo "| **Release Created** | ${{ steps.check-release.outputs.exists == 'false' }} |" >> $GITHUB_STEP_SUMMARY
