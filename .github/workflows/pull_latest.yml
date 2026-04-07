@@ -25,14 +25,11 @@ jobs:
     runs-on: ubuntu-latest
 
     permissions:
-      contents: write  # Required to commit files and create releases
+      contents: write  # Required to create GitHub Releases and upload assets
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-        with:
-          token: ${{ github.token }}
-          fetch-depth: 0
 
       - name: Resolve release tag and metadata
         id: fetch-release
@@ -135,41 +132,8 @@ jobs:
           zip -r "/tmp/$ZIP_NAME" "$LATEST_VERSION/"
           echo "Zip size: $(du -h /tmp/$ZIP_NAME | cut -f1)"
 
-          # Copy zip and raw folder into the workspace for committing
-          cp "/tmp/$ZIP_NAME" "$GITHUB_WORKSPACE/$ZIP_NAME"
-          cp -r "$VERSION_DIR" "$GITHUB_WORKSPACE/$LATEST_VERSION"
-
-          echo ""
-          echo "Workspace files staged:"
-          find "$GITHUB_WORKSPACE/$LATEST_VERSION" -type f | sort
-          ls -lh "$GITHUB_WORKSPACE/$ZIP_NAME"
-
-      - name: Check for changes
-        id: check-changes
-        run: |
-          git config --global --add safe.directory "$GITHUB_WORKSPACE"
-          # Use 'git status --porcelain' so brand-new untracked folders are also detected,
-          # unlike 'git diff-index' which only sees changes to already-tracked files.
-          if [ -n "$(git status --porcelain)" ]; then
-            echo "Changes detected — new assets for version $LATEST_VERSION"
-            echo "has_changes=true" >> $GITHUB_OUTPUT
-          else
-            echo "No changes detected — version $LATEST_VERSION is already up to date"
-            echo "has_changes=false" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Commit and push changes
-        if: steps.check-changes.outputs.has_changes == 'true'
-        run: |
-          git config --local user.email "action@github.com"
-          git config --local user.name "GitHub Action"
-          git add .
-          git commit -m "chore: pull release assets for version $LATEST_VERSION
-
-          - Source: $SOURCE_REPO
-          - Version: $LATEST_VERSION
-          - Automated pull via GitHub Actions"
-          git push
+          echo "ZIP_PATH=/tmp/$ZIP_NAME" >> $GITHUB_ENV
+          echo "Release asset ready at: /tmp/$ZIP_NAME"
 
       - name: Check if GitHub Release already exists
         id: check-release
@@ -201,7 +165,7 @@ jobs:
 
             ---
             *Pulled from [`${{ env.SOURCE_REPO }}`](https://github.com/${{ env.SOURCE_REPO }}/releases/tag/${{ env.RELEASE_TAG }})*
-          files: ${{ env.ZIP_NAME }}
+          files: ${{ env.ZIP_PATH }}
           make_latest: "true"
           draft: false
           prerelease: false
@@ -215,5 +179,4 @@ jobs:
           echo "| **Source Repo** | \`$SOURCE_REPO\` |" >> $GITHUB_STEP_SUMMARY
           echo "| **Version** | \`$LATEST_VERSION\` |" >> $GITHUB_STEP_SUMMARY
           echo "| **Zip Asset** | \`$ZIP_NAME\` |" >> $GITHUB_STEP_SUMMARY
-          echo "| **Committed** | ${{ steps.check-changes.outputs.has_changes }} |" >> $GITHUB_STEP_SUMMARY
           echo "| **Release Created** | ${{ steps.check-release.outputs.exists == 'false' }} |" >> $GITHUB_STEP_SUMMARY
